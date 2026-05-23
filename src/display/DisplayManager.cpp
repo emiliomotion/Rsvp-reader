@@ -3,8 +3,33 @@
 
 DisplayManager Display;
 
+// Power-on sequence for the AP3032 LED boost converter feeding the display
+// backlight: its CTRL pin is BL_EN on the TCA9554 expander, not a direct
+// ESP32 GPIO. Without setting this high the screen stays dark.
+static bool initIOExpander() {
+    Wire1.begin(IEXP_SDA, IEXP_SCL, 400000);
+
+    // Configure P1 (BL_EN), P6 (SYS_EN), P7 (NS_MODE) as outputs
+    Wire1.beginTransmission(IEXP_ADDR);
+    Wire1.write(IEXP_REG_CFG);
+    Wire1.write(IEXP_CFG_VALUE);
+    if (Wire1.endTransmission() != 0) return false;
+
+    // Drive BL_EN and SYS_EN high
+    Wire1.beginTransmission(IEXP_ADDR);
+    Wire1.write(IEXP_REG_OUT);
+    Wire1.write(IEXP_OUT_VALUE);
+    return Wire1.endTransmission() == 0;
+}
+
 bool DisplayManager::begin() {
-    // ── Backlight ──────────────────────────────────────────────────────────
+    // ── Power up backlight rail via I/O expander ──────────────────────────
+    if (!initIOExpander()) {
+        // Not fatal — the panel may still init, but screen will be dark.
+        Serial.println("TCA9554 init failed (backlight stays off)");
+    }
+
+    // LCD_BL on IO8 is a secondary direct GPIO line; drive it high too.
     pinMode(LCD_BL, OUTPUT);
     digitalWrite(LCD_BL, HIGH);
 

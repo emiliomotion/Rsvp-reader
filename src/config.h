@@ -19,14 +19,27 @@
 #define TOUCH_SCL   18
 #define TOUCH_ADDR  0x3B
 
+// Internal I2C bus (shared by IMU, RTC, audio codec, and TCA9554 I/O expander)
+#define IEXP_SDA       47
+#define IEXP_SCL       48
+#define IEXP_ADDR      0x20    // TCA9554PWR with A0-A2 grounded
+#define IEXP_REG_OUT   0x01
+#define IEXP_REG_CFG   0x03
+
+// I/O expander pin assignments (from schematic GPIO table):
+//   P0=TP_INT   P1=BL_EN    P2=IMU_INT1  P3=IMU_INT2
+//   P4=RTC_INT  P5=LCD_TE   P6=SYS_EN    P7=NS_MODE
+// Outputs we drive: BL_EN (P1) and SYS_EN (P6) high to power the display.
+#define IEXP_BIT_BL_EN   (1 << 1)
+#define IEXP_BIT_SYS_EN  (1 << 6)
+// Configure P1+P6+P7 as outputs (0), everything else as input (1):
+#define IEXP_CFG_VALUE   0x3D    // 0b00111101
+#define IEXP_OUT_VALUE   (IEXP_BIT_BL_EN | IEXP_BIT_SYS_EN)  // 0x42
+
 // SD card (SDMMC 1-bit mode)
 #define SD_CLK    41
 #define SD_CMD    39
 #define SD_DATA0  40
-
-// Internal I2C bus (QMI8658 IMU + PCF85063 RTC — unused by this app)
-// #define INT_SDA  47
-// #define INT_SCL  48
 
 // ── Display geometry (landscape 640×172) ──────────────────────────────────
 #define SCREEN_W     640
