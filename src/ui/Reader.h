@@ -26,10 +26,7 @@ private:
     void drawProgressBar();
     void drawControls(bool playing);
 
-    // Button X regions (7 buttons across 480px)
-    // |<< | < | ⏸/▶ | > | >>| | -WPM | +WPM
-    static const int BTN_W = 480 / 7;
-    int btnLeft(int idx) const { return idx * BTN_W; }
+    static int16_t measureText(Arduino_GFX* g, const String& s, uint8_t sz);
 };
 
 extern Reader ReaderUI;

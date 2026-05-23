@@ -1,7 +1,6 @@
 #pragma once
 
-#define LGFX_USE_V1
-#include <LovyanGFX.hpp>
+#include <Arduino_GFX_Library.h>
 #include "../config.h"
 
 enum class TouchGesture : uint8_t {
@@ -23,18 +22,14 @@ class DisplayManager {
 public:
     bool begin();
 
-    LGFX_Sprite* sprite();   // back buffer — draw here each frame
-    void         push();     // DMA-push sprite to display
+    Arduino_GFX* gfx() { return _panel; }
+    void         push() {}   // no-op: direct-to-panel drawing, kept for API compat
 
     TouchEvent   pollTouch();
 
-    lgfx::LGFX_Device& lcd() { return *_lcd; }
-
 private:
-    lgfx::LGFX_Device* _lcd    = nullptr;
-    LGFX_Sprite*       _sprite = nullptr;
+    Arduino_AXS15231B* _panel = nullptr;
 
-    // Touch gesture state
     bool     _pressed     = false;
     int16_t  _startX      = 0;
     int16_t  _startY      = 0;
@@ -42,6 +37,8 @@ private:
     int16_t  _curY        = 0;
     uint32_t _pressMs     = 0;
     bool     _longEmitted = false;
+
+    bool readTouchRaw(int16_t &sx, int16_t &sy);
 };
 
 extern DisplayManager Display;

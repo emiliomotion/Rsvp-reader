@@ -1,133 +1,86 @@
-#define LGFX_USE_V1
-#include <LovyanGFX.hpp>
+#include <Wire.h>
 #include "DisplayManager.h"
-
-// ── LovyanGFX driver class ────────────────────────────────────────────────
-class LGFX : public lgfx::LGFX_Device {
-    lgfx::Panel_ST7796  _panel;
-    lgfx::Bus_SPI       _bus;
-    lgfx::Light_PWM     _light;
-    lgfx::Touch_FT5x06  _touch;   // FT6336 is FT5x06 family
-
-public:
-    LGFX() {
-        {
-            auto cfg         = _bus.config();
-            cfg.spi_host     = SPI2_HOST;
-            cfg.spi_mode     = 0;
-            cfg.freq_write   = 40000000;
-            cfg.freq_read    = 16000000;
-            cfg.spi_3wire    = false;
-            cfg.use_lock     = true;
-            cfg.dma_channel  = SPI_DMA_CH_AUTO;
-            cfg.pin_sclk     = LCD_SCLK;
-            cfg.pin_mosi     = LCD_MOSI;
-            cfg.pin_miso     = LCD_MISO;
-            cfg.pin_dc       = LCD_DC;
-            _bus.config(cfg);
-            _panel.setBus(&_bus);
-        }
-        {
-            auto cfg             = _panel.config();
-            cfg.pin_cs           = LCD_CS;
-            cfg.pin_rst          = LCD_RST;
-            cfg.pin_busy         = -1;
-            cfg.panel_width      = 320;
-            cfg.panel_height     = 480;
-            cfg.offset_x         = 0;
-            cfg.offset_y         = 0;
-            cfg.offset_rotation  = 1;    // landscape: 480×320
-            cfg.dummy_read_pixel = 8;
-            cfg.dummy_read_bits  = 1;
-            cfg.readable         = true;
-            cfg.invert           = false;
-            cfg.rgb_order        = false;
-            cfg.dlen_16bit       = false;
-            cfg.bus_shared       = true; // SD_MMC shares bus implicitly; keeps CS mutex active
-            _panel.config(cfg);
-        }
-        {
-            auto cfg        = _light.config();
-            cfg.pin_bl      = LCD_BL;
-            cfg.invert      = false;
-            cfg.freq        = 12000;
-            cfg.pwm_channel = 7;
-            _light.config(cfg);
-            _panel.setLight(&_light);
-        }
-        {
-            auto cfg             = _touch.config();
-            cfg.x_min            = 0;
-            cfg.x_max            = 319;
-            cfg.y_min            = 0;
-            cfg.y_max            = 479;
-            cfg.pin_int          = TOUCH_INT;
-            cfg.pin_rst          = TOUCH_RST;
-            cfg.bus_shared       = false;
-            cfg.offset_rotation  = 1;
-            cfg.i2c_port         = 0;
-            cfg.i2c_addr         = 0x38;
-            cfg.pin_sda          = TOUCH_SDA;
-            cfg.pin_scl          = TOUCH_SCL;
-            cfg.freq             = 400000;
-            _touch.config(cfg);
-            _panel.setTouch(&_touch);
-        }
-        setPanel(&_panel);
-    }
-};
-
-static LGFX _lgfx;
 
 DisplayManager Display;
 
 bool DisplayManager::begin() {
-    _lcd = &_lgfx;
-    _lgfx.init();
-    _lgfx.setRotation(1);
-    _lgfx.setBrightness(200);
-    _lgfx.fillScreen(COLOR_BG);
+    // ── Backlight ──────────────────────────────────────────────────────────
+    pinMode(LCD_BL, OUTPUT);
+    digitalWrite(LCD_BL, HIGH);
 
-    _sprite = new LGFX_Sprite(_lcd);
-    _sprite->setPsram(true);
-    _sprite->setColorDepth(16);
-    if (!_sprite->createSprite(SCREEN_W, SCREEN_H)) {
-        return false;
-    }
-    _sprite->fillScreen(COLOR_BG);
+    // ── QSPI bus + AXS15231B panel ────────────────────────────────────────
+    Arduino_ESP32QSPI *bus = new Arduino_ESP32QSPI(
+        LCD_CS, LCD_CLK, LCD_D0, LCD_D1, LCD_D2, LCD_D3
+    );
+
+    // Native panel: 172w × 640h (portrait). r=1 rotates to landscape 640×172.
+    _panel = new Arduino_AXS15231B(bus, LCD_RST, 1 /*rotation*/, false /*IPS*/, 172, 640);
+
+    if (!_panel->begin()) return false;
+
+    _panel->fillScreen(COLOR_BG);
+
+    // ── Touch I2C ──────────────────────────────────────────────────────────
+    Wire.begin(TOUCH_SDA, TOUCH_SCL);
+    Wire.setClock(400000);
+
     return true;
 }
 
-LGFX_Sprite* DisplayManager::sprite() {
-    return _sprite;
-}
+// AXS15231B touch read: write 11-byte command, read 8 bytes back.
+// Returns screen-space coordinates (already rotated for landscape).
+bool DisplayManager::readTouchRaw(int16_t &sx, int16_t &sy) {
+    // 1-point read command (1 × 6 + 2 = 8 bytes requested)
+    const uint8_t cmd[11] = {
+        0xb5, 0xab, 0xa5, 0x5a,
+        0x00, 0x00, 0x00, 0x08,
+        0x00, 0x00, 0x00
+    };
 
-void DisplayManager::push() {
-    _sprite->pushSprite(0, 0);
+    Wire.beginTransmission(TOUCH_ADDR);
+    Wire.write(cmd, sizeof(cmd));
+    if (Wire.endTransmission(false) != 0) return false;
+
+    if (Wire.requestFrom(TOUCH_ADDR, 8) < 8) return false;
+
+    uint8_t d[8];
+    for (int i = 0; i < 8; i++) d[i] = Wire.read();
+
+    if (d[1] == 0) return false; // no touch points
+
+    // Native coords (portrait 172×640)
+    int16_t raw_x = (int16_t)(((d[2] & 0x0F) << 8) | d[3]);
+    int16_t raw_y = (int16_t)(((d[4] & 0x0F) << 8) | d[5]);
+
+    // Map to landscape screen coords (640×172):
+    // portrait x [0,171] → landscape y; portrait y [0,639] → landscape x
+    sx = TOUCH_MIRROR_X ? (639 - raw_y) : raw_y;
+    sy = TOUCH_MIRROR_Y ? (171 - raw_x) : raw_x;
+
+    return true;
 }
 
 TouchEvent DisplayManager::pollTouch() {
     TouchEvent evt;
-    lgfx::touch_point_t tp;
-    bool touching = _lcd->getTouch(&tp) > 0;
-
+    int16_t tx = 0, ty = 0;
+    bool touching = readTouchRaw(tx, ty);
     uint32_t now = millis();
 
     if (touching && !_pressed) {
         _pressed     = true;
-        _startX      = tp.x;
-        _startY      = tp.y;
-        _curX        = tp.x;
-        _curY        = tp.y;
+        _startX      = tx;
+        _startY      = ty;
+        _curX        = tx;
+        _curY        = ty;
         _pressMs     = now;
         _longEmitted = false;
     } else if (touching && _pressed) {
-        _curX = tp.x;
-        _curY = tp.y;
+        _curX = tx;
+        _curY = ty;
         int16_t dx = _curX - _startX;
-        int displacement = abs(dx);
-        if (!_longEmitted && (uint32_t)(now - _pressMs) >= LONG_PRESS_MS
-                          && displacement < SWIPE_THRESHOLD_PX) {
+        if (!_longEmitted
+            && (uint32_t)(now - _pressMs) >= LONG_PRESS_MS
+            && abs(dx) < SWIPE_THRESHOLD_PX) {
             _longEmitted = true;
             evt.x = _startX;
             evt.y = _startY;
@@ -138,9 +91,9 @@ TouchEvent DisplayManager::pollTouch() {
     } else if (!touching && _pressed) {
         _pressed = false;
         if (!_longEmitted) {
-            uint32_t duration = (uint32_t)(now - _pressMs);
-            int16_t  dx       = _curX - _startX;
-            if (duration <= TAP_MAX_MS && abs(dx) < SWIPE_THRESHOLD_PX) {
+            uint32_t dur = (uint32_t)(now - _pressMs);
+            int16_t  dx  = _curX - _startX;
+            if (dur <= TAP_MAX_MS && abs(dx) < SWIPE_THRESHOLD_PX) {
                 evt.gesture = TouchGesture::TAP;
                 evt.x = _startX;
                 evt.y = _startY;

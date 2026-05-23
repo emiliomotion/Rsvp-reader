@@ -5,18 +5,20 @@
 
 class FileSelector {
 public:
-    void     begin();          // scan SD for .txt files
-    void     render();         // draw current list page to sprite
-    String   handleTouch(const TouchEvent& evt); // returns path or ""
+    void   begin();           // scan SD root for .txt files
+    void   render();          // draw list to display
+    String handleTouch(const TouchEvent& evt); // returns path or ""
 
 private:
     std::vector<String> _files;
-    int _scrollOffset = 0;    // first visible row index
+    int _scrollOffset = 0;
 
-    static const int ROW_H  = 44;
-    static const int ROWS   = SCREEN_H / ROW_H;  // visible rows
+    // Rows: 640×172 in landscape — use full height, wide rows
+    static const int ROW_H = 38;
+    static const int TITLE_H = 28;
+    static const int ROWS = (SCREEN_H - TITLE_H) / ROW_H;  // 3 rows visible
 
-    void drawRow(int row, const String& name, bool highlighted);
+    void drawRow(int screenRow, const String& name);
 };
 
 extern FileSelector FileSel;

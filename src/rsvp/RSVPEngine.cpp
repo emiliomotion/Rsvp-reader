@@ -5,20 +5,19 @@ RSVPEngine Engine;
 void RSVPEngine::begin(uint32_t wordCount) {
     _count    = wordCount;
     _index    = 0;
-    _lastMs   = 0;
+    _lastMs   = millis();
     _wpm      = WPM_DEFAULT;
     _interval = 60000 / _wpm;
 }
 
 bool RSVPEngine::tick() {
     if (_index >= _count) return false;
-    uint32_t now = millis();
-    if ((uint32_t)(now - _lastMs) >= _interval) {
-        _lastMs = now;
-        if (_index < _count) _index++;
-        return true;
-    }
-    return false;
+    return (uint32_t)(millis() - _lastMs) >= _interval;
+}
+
+void RSVPEngine::advance() {
+    if (_index < _count) _index++;
+    _lastMs = millis();
 }
 
 void RSVPEngine::setWpm(int wpm) {
@@ -28,15 +27,12 @@ void RSVPEngine::setWpm(int wpm) {
 
 void RSVPEngine::seek(int delta) {
     int next = (int)_index + delta;
-    if (next < 0) next = 0;
-    if ((uint32_t)next > _count) next = (int)_count;
-    _index  = (uint32_t)next;
-    _lastMs = millis(); // reset timing from new position
+    _index  = (uint32_t)constrain(next, 0, (int)_count);
+    _lastMs = millis();
 }
 
 void RSVPEngine::seekSentence(int dir) {
     if (dir > 0) {
-        // Advance to the word after the next sentence boundary
         uint32_t i = _index;
         while (i < _count) {
             if (Buffer.word(i).sentenceEnd) { i++; break; }
@@ -44,12 +40,10 @@ void RSVPEngine::seekSentence(int dir) {
         }
         _index = i < _count ? i : _count;
     } else {
-        // Step back past current position's sentence boundary, then to start of that sentence
         int i = (int)_index - 1;
-        // Skip over a boundary immediately behind us if we're at one
         if (i > 0 && Buffer.word(i).sentenceEnd) i--;
         while (i > 0 && !Buffer.word(i - 1).sentenceEnd) i--;
-        _index = (uint32_t)(i < 0 ? 0 : i);
+        _index = (uint32_t)max(i, 0);
     }
     _lastMs = millis();
 }
@@ -61,6 +55,5 @@ uint8_t RSVPEngine::progressPct() const {
 
 uint32_t RSVPEngine::secondsRemaining() const {
     if (_count == 0 || _index >= _count) return 0;
-    uint32_t wordsLeft = _count - _index;
-    return (wordsLeft * 60UL) / (uint32_t)_wpm;
+    return ((_count - _index) * 60UL) / (uint32_t)_wpm;
 }

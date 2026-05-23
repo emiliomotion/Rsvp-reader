@@ -9,21 +9,21 @@
 
 enum class AppState : uint8_t { BROWSE, PAUSED, READING };
 
-static AppState state = AppState::BROWSE;
+static AppState state      = AppState::BROWSE;
+static bool     needRender = true;
 
-static void showLoading(const String& path) {
-    LGFX_Sprite* spr = Display.sprite();
-    spr->fillScreen(COLOR_BG);
-    spr->setTextColor(COLOR_TEXT, COLOR_BG);
-    spr->setTextSize(2);
-    spr->setCursor(20, SCREEN_H / 2 - 8);
-    spr->print("Loading...");
-    Display.push();
+static void showMessage(const char* msg) {
+    Arduino_GFX* g = Display.gfx();
+    g->fillScreen(COLOR_BG);
+    g->setTextColor(COLOR_STATUS_TEXT);
+    g->setTextSize(2);
+    g->setCursor(20, SCREEN_H / 2 - 8);
+    g->print(msg);
 }
 
 static bool initSD() {
     SD_MMC.setPins(SD_CLK, SD_CMD, SD_DATA0);
-    return SD_MMC.begin("/sdcard", true); // 1-bit mode
+    return SD_MMC.begin("/sdcard", /*mode1bit=*/true);
 }
 
 void setup() {
@@ -35,77 +35,91 @@ void setup() {
     }
 
     if (!initSD()) {
-        LGFX_Sprite* spr = Display.sprite();
-        spr->fillScreen(COLOR_BG);
-        spr->setTextColor(COLOR_ORP, COLOR_BG);
-        spr->setTextSize(2);
-        spr->setCursor(20, SCREEN_H / 2 - 8);
-        spr->print("SD card not found!");
-        Display.push();
+        showMessage("SD card not found!");
         Serial.println("SD_MMC init failed");
         while (true) delay(500);
     }
 
     FileSel.begin();
-    state = AppState::BROWSE;
+    needRender = true;
 }
 
 void loop() {
     TouchEvent evt = Display.pollTouch();
 
     switch (state) {
+
         case AppState::BROWSE: {
-            FileSel.render();
             String chosen = FileSel.handleTouch(evt);
             if (chosen.length() > 0) {
-                showLoading(chosen);
+                showMessage("Loading...");
                 if (Buffer.load(chosen.c_str()) && Buffer.count() > 0) {
                     Engine.begin(Buffer.count());
                     state = AppState::PAUSED;
-                    Serial.printf("Loaded %u words from %s\n", Buffer.count(), chosen.c_str());
+                    needRender = true;
+                    Serial.printf("Loaded %u words\n", Buffer.count());
                 } else {
-                    Serial.println("Failed to load file or empty");
+                    showMessage("Failed to load file");
+                    delay(1500);
+                    FileSel.begin();
+                    needRender = true;
                 }
+            } else if (needRender || evt.gesture != TouchGesture::NONE) {
+                FileSel.render();
+                needRender = false;
             }
             break;
         }
 
         case AppState::PAUSED: {
             ReaderCmd cmd = ReaderUI.handleTouch(evt);
+            bool changed = (cmd != ReaderCmd::NONE);
+
             switch (cmd) {
-                case ReaderCmd::TOGGLE_PLAY:    state = AppState::READING; break;
-                case ReaderCmd::SEEK_BACK:      Engine.seek(-SEEK_WORDS);  break;
-                case ReaderCmd::SEEK_FWD:       Engine.seek(+SEEK_WORDS);  break;
-                case ReaderCmd::SENTENCE_BACK:  Engine.seekSentence(-1);   break;
-                case ReaderCmd::SENTENCE_FWD:   Engine.seekSentence(+1);   break;
-                case ReaderCmd::WPM_DOWN:       Engine.setWpm(Engine.wpm() - WPM_STEP); break;
-                case ReaderCmd::WPM_UP:         Engine.setWpm(Engine.wpm() + WPM_STEP); break;
+                case ReaderCmd::TOGGLE_PLAY:   state = AppState::READING; break;
+                case ReaderCmd::SEEK_BACK:     Engine.seek(-SEEK_WORDS);  break;
+                case ReaderCmd::SEEK_FWD:      Engine.seek(+SEEK_WORDS);  break;
+                case ReaderCmd::SENTENCE_BACK: Engine.seekSentence(-1);   break;
+                case ReaderCmd::SENTENCE_FWD:  Engine.seekSentence(+1);   break;
+                case ReaderCmd::WPM_DOWN:      Engine.setWpm(Engine.wpm() - WPM_STEP); break;
+                case ReaderCmd::WPM_UP:        Engine.setWpm(Engine.wpm() + WPM_STEP); break;
                 default: break;
             }
-            ReaderUI.render(false);
+
+            if (needRender || changed) {
+                ReaderUI.render(false);
+                needRender = false;
+            }
             break;
         }
 
         case AppState::READING: {
             ReaderCmd cmd = ReaderUI.handleTouch(evt);
+            bool changed = (cmd != ReaderCmd::NONE);
+
             switch (cmd) {
-                case ReaderCmd::TOGGLE_PLAY:    state = AppState::PAUSED;  break;
-                case ReaderCmd::SEEK_BACK:      Engine.seek(-SEEK_WORDS);  break;
-                case ReaderCmd::SEEK_FWD:       Engine.seek(+SEEK_WORDS);  break;
-                case ReaderCmd::SENTENCE_BACK:  Engine.seekSentence(-1);   break;
-                case ReaderCmd::SENTENCE_FWD:   Engine.seekSentence(+1);   break;
-                case ReaderCmd::WPM_DOWN:       Engine.setWpm(Engine.wpm() - WPM_STEP); break;
-                case ReaderCmd::WPM_UP:         Engine.setWpm(Engine.wpm() + WPM_STEP); break;
+                case ReaderCmd::TOGGLE_PLAY:   state = AppState::PAUSED;  changed = true; break;
+                case ReaderCmd::SEEK_BACK:     Engine.seek(-SEEK_WORDS);  break;
+                case ReaderCmd::SEEK_FWD:      Engine.seek(+SEEK_WORDS);  break;
+                case ReaderCmd::SENTENCE_BACK: Engine.seekSentence(-1);   break;
+                case ReaderCmd::SENTENCE_FWD:  Engine.seekSentence(+1);   break;
+                case ReaderCmd::WPM_DOWN:      Engine.setWpm(Engine.wpm() - WPM_STEP); break;
+                case ReaderCmd::WPM_UP:        Engine.setWpm(Engine.wpm() + WPM_STEP); break;
                 default: break;
             }
 
             if (Engine.index() >= Engine.wordCount()) {
-                state = AppState::PAUSED; // reached end
-            } else {
-                Engine.tick();
+                state = AppState::PAUSED;
+                changed = true;
+            } else if (Engine.tick()) {
+                Engine.advance();
+                changed = true;
             }
 
-            ReaderUI.render(true);
+            if (needRender || changed) {
+                ReaderUI.render(state == AppState::READING);
+                needRender = false;
+            }
             break;
         }
     }
